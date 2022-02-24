@@ -1,6 +1,5 @@
 #include "alsa_layer.h"
 
-
 snd_seq_t* sequencer;
 int port_out_id, queue_id;
 
@@ -15,9 +14,9 @@ void check_error(int code, int line) {
 
 double bpm = 80.0;
 
-void setup() {
+void alsa_layer_setup(const char *name) {
 	CHECK(snd_seq_open(&sequencer, "default", SND_SEQ_OPEN_DUPLEX, 0));
-	CHECK(snd_seq_set_client_name(sequencer, "improvmidi"));
+	CHECK(snd_seq_set_client_name(sequencer, name));
 	CHECK(port_out_id = snd_seq_create_simple_port(
 			sequencer, 
 			"improv", 
@@ -41,7 +40,7 @@ void setup() {
 	// snd_seq_connect_to(sequencer, 0, 130, 0); // zynaddsubfx
 }
 
-void on_quit(int signum) {
+void alsa_layer_on_quit(int signum) {
 	// puts("Quitting...\n");
 	snd_seq_close(sequencer);
 	exit(1);
@@ -50,7 +49,7 @@ void on_quit(int signum) {
 int _chan = 0;
 
 /// please make sure all notes are stopped before running thi
-void set_channel(int chan) {
+void alsa_layer_set_channel(int chan) {
 	_chan = chan - 1;
 }
 
@@ -60,7 +59,7 @@ void set_channel(int chan) {
 /// if start_time is less than zero, plays instantly
 /// if duration = 0: note on
 /// if duration < 0: note off
-void schedule_note(int pitch, int velocity, float duration, float start_time) {
+void alsa_layer_schedule_note(int pitch, int velocity, float duration, float start_time) {
 	snd_seq_event_t midi_event;
 	snd_seq_ev_clear(&midi_event);
 	snd_seq_ev_set_subs(&midi_event);
@@ -74,19 +73,22 @@ void schedule_note(int pitch, int velocity, float duration, float start_time) {
 		snd_seq_ev_set_noteoff(&midi_event, _chan, pitch, velocity);
 	}
 
-	// TODO: potentially change to all relative scheduling, by changing 0 to 1
-	if(start_time < 0) {
+	if(start_time < 0 && duration > 0) {
 		snd_seq_queue_status_t *queue_status;
 		snd_seq_queue_status_malloc(&queue_status);
 		snd_seq_get_queue_status(sequencer, queue_id, queue_status);
 		snd_seq_ev_schedule_tick(&midi_event, queue_id, 0, snd_seq_queue_status_get_tick_time(queue_status));
 		snd_seq_queue_status_free(queue_status);
+	} else if(start_time < 0) {
+		snd_seq_ev_set_direct(&midi_event);
+		snd_seq_event_output_direct(sequencer, &midi_event);
+		return;
 	} else {
 		snd_seq_ev_schedule_tick(&midi_event, queue_id, 0, (int)(start_time * (float)TICKS_PER_QUARTER));
 	}
 	CHECK(snd_seq_event_output(sequencer, &midi_event));
 }
 
-void play_scheduled() {
+void alsa_layer_play_scheduled() {
 	CHECK(snd_seq_drain_output(sequencer));
 }

@@ -2,7 +2,7 @@
 #include <time.h>
 #include <signal.h>
 #include <assert.h>
-#include <stdlib.h>
+#include <stdlib.h> 
 #include <string.h>
 
 // void check_error(int code, int line) {
@@ -33,7 +33,7 @@ void print_array(int *array, int array_length) {
 void schedule_note_relative(int pitch, int velocity, float duration, float start_time) {
 	static float offset_time = 0.0;
 	offset_time += start_time;
-	schedule_note(pitch, velocity, duration, offset_time);
+	alsa_layer_schedule_note(pitch, velocity, duration, offset_time);
 }
 
 int note_letter_to_number(char c) {
@@ -119,16 +119,16 @@ int midi_to_in_octave(int midi) {
 }
 
 void schedule_triad(int root, int second, int third, int inversion, int velocity, float duration, float start_time) {
-	schedule_note(root, velocity, duration, start_time);
-	schedule_note(root+second - (inversion == 1 ? OCTAVE : 0), velocity, duration, start_time);
-	schedule_note(root+third - (inversion ? OCTAVE : 0), velocity, duration, start_time);
+	alsa_layer_schedule_note(root, velocity, duration, start_time);
+	alsa_layer_schedule_note(root+second - (inversion == 1 ? OCTAVE : 0), velocity, duration, start_time);
+	alsa_layer_schedule_note(root+third - (inversion ? OCTAVE : 0), velocity, duration, start_time);
 }
 
 void schedule_tetrachord(int root, int second, int third, int fourth, int inversion, int velocity, float duration, float start_time) {
-	schedule_note(root, velocity, duration, start_time);
-	schedule_note(root+second - (inversion == 1 ? OCTAVE : 0), velocity, duration, start_time);
-	schedule_note(root+third - (inversion >= 1 && inversion <= 2 ? OCTAVE : 0), velocity, duration, start_time);
-	schedule_note(root+fourth - (inversion >= 1 && inversion <= 3 ? OCTAVE : 0), velocity, duration, start_time);
+	alsa_layer_schedule_note(root, velocity, duration, start_time);
+	alsa_layer_schedule_note(root+second - (inversion == 1 ? OCTAVE : 0), velocity, duration, start_time);
+	alsa_layer_schedule_note(root+third - (inversion >= 1 && inversion <= 2 ? OCTAVE : 0), velocity, duration, start_time);
+	alsa_layer_schedule_note(root+fourth - (inversion >= 1 && inversion <= 3 ? OCTAVE : 0), velocity, duration, start_time);
 }
 
 void schedule_chord(int root, enum chort_type chord, int inversion, int velocity, float duration, float start_time) {
@@ -267,6 +267,10 @@ void voice_lead(int* starting_notes, int* target_notes, int* output_notes, int l
 		output_notes[i] = closest_note(starting_notes[i], target_notes[current_minimum[i]]);
 	//		printf("%d\t\t%d\t\t%d\n", starting_notes[i], target_notes[current_minimum[i]], output_notes[i]);
 	}
+	if(output_notes[0] < output_notes[2] - 24)
+		output_notes[2] -= 12;
+	if(output_notes[0] < output_notes[1] - 24)
+		output_notes[1] -= 12;
 
 	free(cost_matrix);
 	
@@ -309,14 +313,6 @@ void chord_name_to_triad(const char* name, int* triad_out) {
 	} else if(name[index] == 'a' &&name[index+1] == 'u' && name[index+2] == 'g') {
 		is_augmented = 1;
 		index+=3;
-	} else if(name[index] == 's' &&name[index+1] == 'u' && name[index+2] == 's') {
-		is_suspended = 4;
-		index+=3;
-		if(name[index] == '4') index++;
-		else if(name[index] == '2') {
-			index++;
-			is_suspended = 2;
-		}
 	} else if(name[index] == 'h' &&name[index+1] == 'd' && name[index+2] == 'i'&& name[index+3] == 'm') {
 		is_diminished = 2;
 		is_major = 0;
@@ -324,20 +320,44 @@ void chord_name_to_triad(const char* name, int* triad_out) {
 	}
 
 	if(name[index] == '7') {
+		index++;
 		is_seven = 1;
 	} else if (name[index] == '6') {
+		index++;
 		is_sixth = 1;
 	} 
 
 	if (name[index] == 'b' && name[index+1] == '5') {
+		index+=2;
 		is_diminished = 1;
 	}
+
+
+	if(name[index] == 's' &&name[index+1] == 'u' && name[index+2] == 's') {
+		is_suspended = 4;
+		index+=3;
+		if(name[index] == '4') index++;
+		else if(name[index] == '2') {
+			index++;
+			is_suspended = 2;
+			if(name[index] == '4') {
+				index++;
+				is_suspended = 3;
+			}
+		}
+	}
+
 
 	if(is_suspended) {
 		if(is_suspended == 2)
 			triad_out[1] = triad_out[0] + MAJOR_SECOND;
-		else
+		else if(is_suspended == 4)
 			triad_out[1] = triad_out[0] + PERFECT_FOURTH;
+		else {
+			triad_out[1] = triad_out[0] + MAJOR_SECOND;
+			triad_out[2] = triad_out[0] + PERFECT_FOURTH;
+			goto prereturn;
+		}
 	} else if(is_major) {
 		triad_out[1] = triad_out[0] + MAJOR_THIRD;
 	} else {
@@ -367,6 +387,8 @@ void chord_name_to_triad(const char* name, int* triad_out) {
 			triad_out[2] = triad_out[0] + MINOR_SIXTH;
 		}
 	}
+
+prereturn:
 	triad_out[1] %= 12;
 	triad_out[2] %= 12;
 }
@@ -375,32 +397,34 @@ void chord_name_to_triad(const char* name, int* triad_out) {
 int playing_chord[CHORD_SIZE] = {60, 64, 67};
 
 void clear_playing_chord() {
-	schedule_note(playing_chord[0], 80, -1.0, -1.0);
-	schedule_note(playing_chord[1], 80, -1.0, -1.0);
-	schedule_note(playing_chord[2], 80, -1.0, -1.0);
+	alsa_layer_schedule_note(playing_chord[0], 80, -1.0, -1.0);
+	alsa_layer_schedule_note(playing_chord[1], 80, -1.0, -1.0);
+	alsa_layer_schedule_note(playing_chord[2], 80, -1.0, -1.0);
 }
 
 void my_on_quit(int signum) {
 	clear_playing_chord();
-	play_scheduled();
+	alsa_layer_play_scheduled();
 	usleep(100000);
-	on_quit(signum);
+	alsa_layer_on_quit(signum);
 }
 
 int main() {
 	signal(SIGTERM, my_on_quit);
 	signal(SIGINT, my_on_quit);
 
-	setup();
+	alsa_layer_setup("improvmidi");
 
 
 	int target_chord[CHORD_SIZE]; // = {NOTE_G, NOTE_B, NOTE_D};
 	int output[CHORD_SIZE];
 
-	schedule_note(playing_chord[0], 80, 1, -1.0);
-	schedule_note(playing_chord[1], 80, 1, -1.0);
-	schedule_note(playing_chord[2], 80, 1, -1.0);
-	play_scheduled();
+	// schedule_note(playing_chord[0], 80, 1, -1.0);
+	// schedule_note(playing_chord[1], 80, 1, -1.0);
+	// schedule_note(playing_chord[2], 80, 1, -1.0);
+	// play_scheduled();
+
+	float tempo = 2.0; // in beats per second
 
 	char buffer[20];
 	while(1) {
@@ -427,11 +451,20 @@ int main() {
 
 		if(!strcmp(buffer, "stop\n")) {
 			clear_playing_chord();
-			play_scheduled();
+			alsa_layer_play_scheduled();
+		} else if(!strcmp(buffer, "quit\n")) {
+			clear_playing_chord();
+			alsa_layer_play_scheduled();
+			my_on_quit(0);
+		} else if(!strcmp(buffer, "wake\n")) {
+			puts("wake");
 		} else if(!strcmp(buffer, "reset\n")) {
 			playing_chord[0] = s2n("C4");
 			playing_chord[1] = s2n("E4");
 			playing_chord[2] = s2n("G4");
+		} else if(!strcmp(buffer, "wide\n")) {
+			clear_playing_chord();
+			playing_chord[1] += 12;
 		} else if(!strcmp(buffer, "iup\n")) {
 			clear_playing_chord();
 			if(playing_chord[0] < playing_chord[1] && playing_chord[0] < playing_chord[2])
@@ -461,8 +494,32 @@ int main() {
 	  } else if(!strncmp(buffer, "chan ", 5)){
 			int new_chan = atoi(&buffer[5]);
 			clear_playing_chord();
-			set_channel(new_chan);
-		} else {
+			alsa_layer_set_channel(new_chan);
+	  } else if(!strncmp(buffer, "msleep ", 7)){
+			// milisecond sleep
+			int sleepLength = atoi(&buffer[7]);
+			usleep(1000 * sleepLength);
+	  } else if(!strncmp(buffer, "bsleep ", 7)){
+			// fraction like 3/8 or 3 8 of a beat to sleep for, or just a single integer
+			char * endptr;	
+			int numerator = strtol(&buffer[7], &endptr, 10);
+			int denominator = 1;
+			if(endptr[0] == '/' || endptr[0] == ' ') {
+				 denominator = strtol(endptr + 1, NULL, 10);
+			}
+			int usecs = 1000000.0 * (float)numerator / (float)denominator / tempo;
+			usleep(usecs);
+	  } else if(!strncmp(buffer, "fsleep ", 7)){
+			// same as bsleep except pass a float, so sleep 2.5 beats for example
+			float beats = strtof(&buffer[7], NULL);
+			printf("%f\n", beats);
+			int usecs = 1000000.0 * beats / tempo;
+			usleep(usecs);
+		} else if(!strncmp(buffer, "settempo ", 9)){
+			tempo = strtof(&buffer[9], NULL) / 60.0;
+	  } else if(!strcmp(buffer, "gettempo\n")){
+			printf("%f\n", tempo * 60.0);
+		} else if((buffer[0] >= 'a' && buffer[0] <= 'g') || (buffer[0] >= 'A' && buffer[0] <= 'G')){
 			chord_name_to_triad(buffer, target_chord);
 
 			clear_playing_chord();
@@ -470,10 +527,10 @@ int main() {
 			voice_lead(playing_chord, target_chord, playing_chord, CHORD_SIZE);
 			// print_array(target_chord, CHORD_SIZE);
 			// print_array(starting_chord, CHORD_SIZE);
-			schedule_note(playing_chord[0], 80, 0, -1.0);
-			schedule_note(playing_chord[1], 80, 0, -1.0);
-			schedule_note(playing_chord[2], 80, 0, -1.0);
-			play_scheduled();
+			alsa_layer_schedule_note(playing_chord[0], 80, 0, -1.0);
+			alsa_layer_schedule_note(playing_chord[1], 80, 0, -1.0);
+			alsa_layer_schedule_note(playing_chord[2], 80, 0, -1.0);
+			alsa_layer_play_scheduled();
 		}
 	}
 
